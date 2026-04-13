@@ -38,10 +38,29 @@ start_seekdb() {
   exit 1
 }
 
+build_tapestore_url() {
+  python3.12 - <<'PY'
+import os
+from urllib.parse import quote
+
+user = os.getenv("OCEANBASE_USER", "root")
+password = os.getenv("OCEANBASE_PASSWORD", "") or os.getenv("ROOT_PASSWORD", "")
+host = os.getenv("OCEANBASE_HOST", "127.0.0.1")
+port = os.getenv("OCEANBASE_PORT", "2881")
+database = os.getenv("OCEANBASE_DATABASE", "bub")
+
+auth = quote(user, safe="")
+if password:
+    auth += ":" + quote(password, safe="")
+
+print(f"mysql+oceanbase://{auth}@{host}:{port}/{database}")
+PY
+}
+
 db_host="${OCEANBASE_HOST:-127.0.0.1}"
 db_port="${OCEANBASE_PORT:-2881}"
 db_user="${OCEANBASE_USER:-root}"
-db_name="${OCEANBASE_DATABASE:-republic}"
+db_name="${OCEANBASE_DATABASE:-bub}"
 db_pass="${OCEANBASE_PASSWORD:-${ROOT_PASSWORD:-}}"
 start_local_seekdb="${START_LOCAL_SEEKDB:-auto}"
 
@@ -88,8 +107,22 @@ mysql -h"${db_host}" -P"${db_port}" -u"${db_user}" ${db_pass:+-p${db_pass}} -e "
 
 echo "Database setup complete!"
 
+export BUB_HOME="${BUB_HOME:-/app/.bub}"
+export BUB_WORKSPACE_PATH="${BUB_WORKSPACE_PATH:-/app}"
+mkdir -p "${BUB_HOME}"
+
+if [ -z "${BUB_TAPESTORE_SQLALCHEMY_URL:-}" ]; then
+  export BUB_TAPESTORE_SQLALCHEMY_URL="$(build_tapestore_url)"
+  echo "Derived BUB_TAPESTORE_SQLALCHEMY_URL for ${db_host}:${db_port}/${db_name}"
+else
+  echo "Using explicit BUB_TAPESTORE_SQLALCHEMY_URL"
+fi
+
+export BUB_GRADIO_HOST="${BUB_GRADIO_HOST:-0.0.0.0}"
+export BUB_GRADIO_PORT="${BUB_GRADIO_PORT:-7860}"
+
 # Place Bub built-in skill scripts into workspace so tools/skills can spawn them
-uv run --no-dev python /usr/local/bin/setup-bub-workspace.py || true
+/app/.venv/bin/python /usr/local/bin/setup-bub-workspace.py || true
 
 # Replace skill-installer's install script with project copy (SSL + git fallback)
 if [ -f /app/scripts/install-skill-from-github.py ] && [ -d /app/.agent/skills/skill-installer/scripts ]; then
@@ -99,4 +132,4 @@ fi
 # Project-local skills when agent runs install-skill-from-github.py
 export BUB_SKILLS_HOME="${BUB_SKILLS_HOME:-/app/.agent/skills}"
 
-exec uv run --no-dev python app.py
+exec /app/.venv/bin/python app.py

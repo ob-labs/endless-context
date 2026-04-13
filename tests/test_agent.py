@@ -1,23 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from endless_context.agent import BubAgent, estimate_tokens
-
-
-@dataclass
-class _LoopResult:
-    immediate_output: str
-    assistant_output: str
-    exit_requested: bool
-    steps: int
-    error: str | None = None
-
-
-@dataclass
-class _TapeRef:
-    name: str
 
 
 @dataclass
@@ -26,109 +13,84 @@ class _Entry:
     kind: str
     payload: dict[str, Any]
     meta: dict[str, Any]
+    date: str = "2026-02-10T00:00:00Z"
+
+
+class _FakeTape:
+    def __init__(self, name: str, entries: list[_Entry]) -> None:
+        self.name = name
+        self._entries = entries
+
+    @property
+    def query_async(self):
+        class _Query:
+            async def all(inner_self):  # noqa: ANN001
+                return list(self._entries)
+
+        return _Query()
 
 
 class _FakeTapeService:
-    def __init__(self, name: str, entries: list[_Entry] | None = None) -> None:
-        self.tape = _TapeRef(name=name)
-        self.entries: list[_Entry] = list(entries or [])
+    def __init__(self, entries: list[_Entry] | None = None) -> None:
+        self.entries = list(entries or [])
         self.events: list[tuple[str, dict[str, Any]]] = []
-        self.reset_calls: list[bool] = []
+        self.handoff_calls: list[tuple[str, dict[str, Any] | None]] = []
+        self.reset_calls: list[tuple[str, bool]] = []
 
-    def read_entries(self) -> list[_Entry]:
-        return list(self.entries)
+    def session_tape(self, session_id: str, workspace) -> _FakeTape:  # noqa: ANN001
+        return _FakeTape(f"tape:{session_id}", self.entries)
 
-    def ensure_bootstrap_anchor(self) -> None:
+    async def ensure_bootstrap_anchor(self, tape_name: str) -> None:
         has_anchor = any(item.kind == "anchor" for item in self.entries)
-        if has_anchor:
-            return
-        self.handoff("session/start", state={"owner": "human"})
-
-    def handoff(self, name: str, state: dict[str, Any] | None = None) -> list[_Entry]:
-        anchor = _Entry(
-            id=len(self.entries) + 1,
-            kind="anchor",
-            payload={"name": name, "state": state or {}},
-            meta={},
-        )
-        self.entries.append(anchor)
-        return [anchor]
-
-    def append_event(self, name: str, data: dict[str, Any]) -> None:
-        self.events.append((name, dict(data)))
-        self.entries.append(
-            _Entry(
-                id=len(self.entries) + 1,
-                kind="event",
-                payload={"name": name, "data": dict(data)},
-                meta={},
+        if not has_anchor:
+            self.entries.append(
+                _Entry(len(self.entries) + 1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {})
             )
-        )
 
-    def reset(self, archive: bool = False) -> str:
-        self.reset_calls.append(archive)
+    async def append_event(self, tape_name: str, name: str, payload: dict[str, Any]) -> None:
+        self.events.append((name, payload))
+
+    async def handoff(self, tape_name: str, *, name: str, state: dict[str, Any] | None = None):
+        self.handoff_calls.append((name, state))
+        self.entries.append(_Entry(len(self.entries) + 1, "anchor", {"name": name, "state": state or {}}, {}))
+        return []
+
+    async def reset(self, tape_name: str, archive: bool = False) -> str:
+        self.reset_calls.append((tape_name, archive))
         self.entries.clear()
-        self.handoff("session/start", state={"owner": "human"})
         return "ok"
 
 
-class _FakeSession:
-    def __init__(self, tape: _FakeTapeService) -> None:
-        self.tape = tape
+class _FakeRuntimeAgent:
+    def __init__(self, tape_service: _FakeTapeService) -> None:
+        self.tapes = tape_service
 
 
-class _FakeRuntime:
-    def __init__(self, session: _FakeSession) -> None:
-        self._session = session
-        self.settings = _Settings()
-        self.handle_input_calls: list[tuple[str, str]] = []
-        self.reset_calls: list[str] = []
-        self.next_result = _LoopResult("", "ok", False, 1)
+class _FakeStore:
+    def __init__(self, entries: list[_Entry] | None = None) -> None:
+        self._entries = list(entries or [])
 
-    def get_session(self, session_id: str) -> _FakeSession:
-        self._last_session_id = session_id
-        return self._session
-
-    async def handle_input(self, session_id: str, text: str) -> _LoopResult:
-        self.handle_input_calls.append((session_id, text))
-        self._session.tape.entries.append(
-            _Entry(
-                id=len(self._session.tape.entries) + 1,
-                kind="message",
-                payload={"role": "user", "content": text},
-                meta={},
-            )
-        )
-        if self.next_result.assistant_output:
-            self._session.tape.entries.append(
-                _Entry(
-                    id=len(self._session.tape.entries) + 1,
-                    kind="message",
-                    payload={"role": "assistant", "content": self.next_result.assistant_output},
-                    meta={},
-                )
-            )
-        return self.next_result
-
-    def reset_session_context(self, session_id: str) -> None:
-        self.reset_calls.append(session_id)
+    def read(self, tape_name: str):  # noqa: ANN001
+        del tape_name
+        return list(self._entries)
 
 
-class _Settings:
-    def model_copy(self, update: dict[str, object]) -> _Settings:
-        self.last_update = update
-        return self
-
-
-def _build_agent(entries: list[_Entry] | None = None) -> tuple[BubAgent, _FakeRuntime, _FakeTapeService]:
-    tape = _FakeTapeService(name="endless-context:default", entries=entries)
-    runtime = _FakeRuntime(_FakeSession(tape))
-    agent = BubAgent(runtime=runtime)
-    return agent, runtime, tape
+def _build_agent(
+    entries: list[_Entry] | None = None,
+    *,
+    store_entries: list[_Entry] | None = None,
+) -> tuple[BubAgent, _FakeTapeService]:
+    tape_service = _FakeTapeService(entries)
+    agent = BubAgent.__new__(BubAgent)
+    store = _FakeStore(store_entries) if store_entries is not None else None
+    agent._framework = SimpleNamespace(workspace=".", get_tape_store=lambda: store)
+    agent._runtime_agent = _FakeRuntimeAgent(tape_service)
+    agent._workspace = "."
+    return agent, tape_service
 
 
 def test_snapshot_latest_uses_last_anchor() -> None:
-    agent, _, _ = _build_agent(
+    agent, _ = _build_agent(
         [
             _Entry(1, "message", {"role": "user", "content": "a"}, {}),
             _Entry(2, "anchor", {"name": "handoff:first", "state": {"phase": "First"}}, {}),
@@ -138,56 +100,15 @@ def test_snapshot_latest_uses_last_anchor() -> None:
         ]
     )
 
-    snapshot = agent.snapshot(view_mode="latest")
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
 
     assert snapshot.active_anchor is not None
     assert snapshot.active_anchor.name == "handoff:second"
     assert [entry.id for entry in snapshot.context_entries] == [5]
 
 
-def test_reply_returns_assistant_output_and_records_context_event() -> None:
-    agent, runtime, tape = _build_agent(
-        [
-            _Entry(1, "anchor", {"name": "handoff:phase-a", "state": {"phase": "Phase A"}}, {}),
-            _Entry(2, "message", {"role": "assistant", "content": "seed"}, {}),
-        ]
-    )
-
-    reply = agent.reply("hello", view_mode="from-anchor", anchor_name="handoff:phase-a")
-
-    assert reply == "ok"
-    assert runtime.handle_input_calls[-1][1] == "hello"
-    assert any(name == "gradio.context_selection" for name, _ in tape.events)
-
-
-def test_reply_returns_error_prefix_when_runtime_failed() -> None:
-    agent, runtime, _ = _build_agent()
-    runtime.next_result = _LoopResult("", "", False, 1, error="upstream unavailable")
-
-    reply = agent.reply("hello")
-
-    assert reply == "Error: upstream unavailable"
-
-
-def test_handoff_normalizes_name_and_appends() -> None:
-    agent, _, tape = _build_agent()
-
-    anchor_name = agent.handoff(
-        "Implementation Details",
-        phase="Implementation",
-        summary="Checkpoint",
-        facts=["A", "B"],
-    )
-
-    assert anchor_name == "handoff:implementation-details"
-    anchors = [entry for entry in tape.entries if entry.kind == "anchor"]
-    assert len(anchors) == 1
-    assert anchors[0].payload["name"] == "handoff:implementation-details"
-    assert anchors[0].payload["state"]["facts"] == ["A", "B"]
-
-
 def test_snapshot_from_missing_anchor_uses_latest_anchor() -> None:
-    agent, _, _ = _build_agent(
+    agent, _ = _build_agent(
         [
             _Entry(1, "message", {"role": "user", "content": "a"}, {}),
             _Entry(2, "anchor", {"name": "handoff:one", "state": {"phase": "One"}}, {}),
@@ -195,7 +116,7 @@ def test_snapshot_from_missing_anchor_uses_latest_anchor() -> None:
         ]
     )
 
-    snapshot = agent.snapshot(view_mode="from-anchor", anchor_name="handoff:not-found")
+    snapshot = agent.snapshot("gradio:test", view_mode="from-anchor", anchor_name="handoff:not-found")
 
     assert snapshot.active_anchor is not None
     assert snapshot.active_anchor.name == "handoff:one"
@@ -203,30 +124,54 @@ def test_snapshot_from_missing_anchor_uses_latest_anchor() -> None:
 
 
 def test_snapshot_from_anchor_without_any_anchor_creates_bootstrap_anchor() -> None:
-    agent, _, tape = _build_agent(
+    agent, tape_service = _build_agent(
         [
             _Entry(1, "message", {"role": "user", "content": "a"}, {}),
         ]
     )
 
-    snapshot = agent.snapshot(view_mode="from-anchor", anchor_name="handoff:not-found")
+    snapshot = agent.snapshot("gradio:test", view_mode="from-anchor", anchor_name="handoff:not-found")
 
     assert snapshot.active_anchor is not None
     assert snapshot.active_anchor.name == "session/start"
-    assert any(entry.kind == "anchor" for entry in tape.entries)
+    assert any(entry.kind == "anchor" for entry in tape_service.entries)
 
 
-def test_reset_archives_and_resets_runtime_context() -> None:
-    agent, runtime, tape = _build_agent(
-        [
-            _Entry(1, "message", {"role": "user", "content": "a"}, {}),
-        ]
+def test_handoff_normalizes_name_and_appends() -> None:
+    agent, tape_service = _build_agent()
+
+    anchor_name = agent.handoff(
+        "gradio:test",
+        "Implementation Details",
+        phase="Implementation",
+        summary="Checkpoint",
+        facts=["A", "B"],
     )
 
-    agent.reset()
+    assert anchor_name == "handoff:implementation-details"
+    assert tape_service.handoff_calls[-1][0] == "handoff:implementation-details"
 
-    assert tape.reset_calls == [True]
-    assert runtime.reset_calls == ["endless-context:default"]
+
+def test_append_context_selection_event_records_payload() -> None:
+    agent, tape_service = _build_agent()
+
+    agent.append_context_selection_event(
+        "gradio:test",
+        view_mode="latest",
+        anchor_name="handoff:phase-1",
+        context_entry_count=2,
+        estimated_tokens=123,
+    )
+
+    assert tape_service.events[-1][0] == "gradio.context_selection"
+
+
+def test_reset_archives_tape() -> None:
+    agent, tape_service = _build_agent()
+
+    agent.reset("gradio:test")
+
+    assert tape_service.reset_calls == [("tape:gradio:test", True)]
 
 
 def test_estimate_tokens_prefers_usage_event() -> None:
@@ -238,16 +183,55 @@ def test_estimate_tokens_prefers_usage_event() -> None:
             {
                 "name": "run",
                 "data": {
-                    "status": "ok",
                     "usage": {
-                        "input_tokens": 123,
-                        "output_tokens": 45,
-                        "total_tokens": 168,
-                    },
+                        "total_tokens": 321,
+                    }
                 },
             },
             {},
         ),
     ]
 
-    assert estimate_tokens(entries) == 123
+    assert estimate_tokens(entries) == 321
+
+
+def test_snapshot_reads_entries_from_store_when_available() -> None:
+    agent, _ = _build_agent(
+        entries=[],
+        store_entries=[
+            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
+            _Entry(2, "message", {"role": "assistant", "content": "from-store"}, {}),
+        ],
+    )
+
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
+
+    assert snapshot.total_entries == 2
+    assert snapshot.messages[-1]["content"] == "from-store"
+
+
+def test_snapshot_messages_strip_gradio_context_prefix() -> None:
+    agent, _ = _build_agent(
+        store_entries=[
+            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
+            _Entry(
+                2,
+                "message",
+                {
+                    "role": "user",
+                    "content": (
+                        "surface=gradio|channel=$gradio|chat_id=abc\n---Date: 2026-04-13T08:20:23Z---\nhello again"
+                    ),
+                },
+                {"run_id": "r1"},
+            ),
+            _Entry(3, "message", {"role": "assistant", "content": "Hello!"}, {"run_id": "r1"}),
+        ],
+    )
+
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
+
+    assert snapshot.messages == [
+        {"role": "user", "content": "hello again"},
+        {"role": "assistant", "content": "Hello!"},
+    ]
