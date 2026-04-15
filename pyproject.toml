@@ -1,7 +1,7 @@
 [project]
 name = "endless-context"
 version = "0.1.0"
-description = "A Bub-powered Gradio chat agent with SeekDB tape storage."
+description = "A Bub extension that exposes a Gradio channel backed by OceanBase seekdb."
 authors = [
     { name = "PsiACE", email = "psiace@apache.org" },
 ]
@@ -9,15 +9,23 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "gradio>=4.0.0",
-    "bub==0.2.1",
+    "bub==0.3.3",
+    "loguru>=0.7.2",
+    "pydantic-settings>=2.0.0",
+    "pymysql>=1.1.0",
     "pyobvector>=0.2.22",
+    "republic==0.5.6",
+    "sqlglot>=26.0.0,<30.0.0",
     "sqlalchemy>=2.0.0",
-    "typer>=0.21,<0.22",
 ]
 
 [project.urls]
 Homepage = "https://modelscope.cn/docs/studios/create"
 Repository = "https://github.com/PsiACE/endless-context"
+
+[project.entry-points."bub"]
+endless-context = "endless_context.plugin:register"
+oceanbase-dialect = "endless_context.oceanbase:register"
 
 [dependency-groups]
 dev = [
@@ -34,7 +42,12 @@ requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
 [tool.pdm.build]
+package-dir = "src"
+includes = ["src/endless_context"]
 source-includes = ["app.py", "README.md", ".env.example"]
+
+[tool.uv.sources]
+bub = { git = "https://github.com/bubbuild/bub.git", tag = "0.3.3" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -16,11 +16,11 @@ export: ## Export requirements.txt from uv.lock
 
 .PHONY: run
 run: ## Run the Gradio app
-	@uv run python app.py
+	@.venv/bin/python app.py
 
 .PHONY: test
 test: ## Run tests
-	@uv run pytest
+	@.venv/bin/pytest
 
 .PHONY: check
 check: ## Run code quality checks

@@ -2,21 +2,30 @@
 
 ## Overview
 
-Endless Context is a minimal Gradio chat agent backed by Republic tape primitives and a SeekDB/OceanBase persistent store. The design prioritizes auditability, explicit context slicing, and low operational overhead.
+Endless Context is a Bub extension package focused on one deployment shape:
 
-## Features
+- Bub runtime and CLI stay upstream
+- Gradio is exposed as a Bub channel
+- tape persistence is delegated to `bub-tapestore-sqlalchemy`
+- OceanBase/seekdb support is provided through a thin compatibility plugin
+- the original three-pane Gradio UI/UX is preserved above the new runtime shape
 
-- Tape-first chat orchestration with Republic
-- SeekDB-backed tape store via pyobvector SQLAlchemy dialect
-- Gradio three-pane UI (Tape / Conversation / Anchors)
-- Works on ModelScope Docker Studio via bundled `Dockerfile` + `docker/entrypoint.sh`
-- Supports OpenAI, Qwen, and other any-llm compatible providers
+This keeps the project close to the upstream Bub extension model and removes the old app-local runtime hacks.
 
 ## Architecture
 
-- **UI layer**: Gradio `Blocks` in `app.py`
-- **Agent layer**: `SimpleAgent` in `src/endless_context/agent.py`
-- **Tape store layer**: `SeekDBTapeStore` in `src/endless_context/tape_store.py`
+- **Bub plugin**: `src/endless_context/plugin.py`
+- **Gradio channel**: `src/endless_context/channel.py`
+- **OceanBase compatibility**: `src/endless_context/oceanbase.py`
+- **ModelScope launcher**: `app.py`
+
+## Runtime flow
+
+1. `app.py` creates `BubFramework`, loads installed Bub plugins, and starts `ChannelManager` with `gradio` enabled.
+2. `GradioChannel` launches a Gradio `Blocks` UI on port `7860`.
+3. User input is converted into `ChannelMessage` and handed to Bub through the channel message handler.
+4. Bub runs the normal hook pipeline and persists tape entries through `bub-tapestore-sqlalchemy`.
+5. Assistant output is routed back to `GradioChannel.send()` and rendered in the UI.
 
 ## Quick start
 
@@ -28,6 +37,7 @@ make compose-up
 ```
 
 Starts SeekDB + app together. Stop with `make compose-down`. UI at `http://localhost:7860`.
+SeekDB is kept on the Compose network by default; only the Gradio UI is published to the host.
 
 ### Single container
 
@@ -38,42 +48,38 @@ docker run --rm -p 7860:7860 -p 2881:2881 endless-context:latest
 
 ### ModelScope Docker Studio
 
-- Use the provided `Dockerfile` (bundles SeekDB + app) and `docker/entrypoint.sh` (starts SeekDB, waits for it, then launches the app).
-- Exposed ports: `7860` (Gradio UI) and `2881` (SeekDB). Entry file is `app.py`.
-- Set environment secrets in Studio: `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, and `OCEANBASE_*` values (`HOST`, `PORT`, `USER`, `PASSWORD`, `DATABASE`), with optional `REPUBLIC_*` overrides.
-- Build and run the container; open the forwarded `7860` port to chat.
+- Use the provided `Dockerfile` and `docker/entrypoint.sh`.
+- Exposed ports: `7860` (Gradio channel) and `2881` (SeekDB).
+- Set at least `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE` when needed, and `BUB_TAPESTORE_SQLALCHEMY_URL`.
+- Build and run the container, then open the forwarded `7860` port.
 
 ## Configuration (.env)
 
+- `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`
+- `BUB_TAPESTORE_SQLALCHEMY_URL`
+- `BUB_GRADIO_HOST`, `BUB_GRADIO_PORT`
 - `OCEANBASE_HOST`, `OCEANBASE_PORT`, `OCEANBASE_USER`, `OCEANBASE_PASSWORD`, `OCEANBASE_DATABASE`
-- `REPUBLIC_TAPE_TABLE`
-- `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`
-- Optional `REPUBLIC_MODEL`, `REPUBLIC_API_BASE`, `REPUBLIC_VERBOSE`
 
 ## Development workflow (Makefile)
 
 - `make install` — `uv sync` + `uv run prek install`
 - `make compose-up|down|logs` — Docker Compose lifecycle (local recommended)
 - `make docker-build` — build single-container image for ModelScope
-- `make run` — bare-metal run (`uv run python app.py`, requires local SeekDB or external DB)
+- `make run` — start Bub's `ChannelManager` with the `gradio` channel via `python app.py`
 - `make test` — `uv run pytest`
 - `make check` — lock consistency + `prek run -a`
 - `make lint` / `make fmt` — ruff check/format
 - `make docs-test` / `make docs` — build/serve docs
 
-## Data flow
-
-1. User sends a message through Gradio.
-2. Agent resolves context window (`full`, `latest`, or `from-anchor`).
-3. Republic executes chat and appends structured tape entries.
-4. Tape entries are persisted in SeekDB via `SeekDBTapeStore`.
-5. UI refreshes Tape/Anchors/Context indicator from the persisted tape.
-
 ## Testing
 
-`pytest` covers context slicing, handoff behavior, and reply path wiring.
+`pytest` now focuses on:
+
+- Gradio channel request/response wiring and preserved UI interactions
+- tape snapshot / anchor selection logic on the Bub-native tape service
+- OceanBase/seekdb compatibility patch behavior
 
 ## Risks and mitigations
 
 - External DB dependency: SeekDB must be reachable; use Docker Compose or Docker Studio when possible.
-- LLM credentials: Missing keys fail at runtime; keep `.env` minimal and explicit.
+- Bub version alignment: this package targets the `0.3.x` extension model; keep the `bub` pin and entry-point contract in sync.

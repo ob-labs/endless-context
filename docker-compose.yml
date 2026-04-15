@@ -1,8 +1,8 @@
 services:
   seekdb:
     image: quay.io/oceanbase/seekdb
-    ports:
-      - "2881:2881"
+    expose:
+      - "2881"
     environment:
       ROOT_PASSWORD: ${SEEKDB_ROOT_PASSWORD:-}
     volumes:
@@ -28,8 +28,10 @@ services:
     environment:
       OCEANBASE_HOST: seekdb
       OCEANBASE_PORT: 2881
-      GRADIO_SERVER_NAME: 0.0.0.0
-      GRADIO_SERVER_PORT: 7860
+      BUB_GRADIO_HOST: 0.0.0.0
+      BUB_GRADIO_PORT: 7860
+      BUB_WORKSPACE_PATH: /app
+      BUB_HOME: /app/.bub
     restart: unless-stopped
 
 volumes:
