@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from bub.framework import BubFramework
+
 from endless_context.agent import BubAgent, estimate_tokens
+from endless_context.tape_store import cached_store
 
 
 @dataclass
@@ -23,11 +27,34 @@ class _FakeTape:
 
     @property
     def query_async(self):
-        class _Query:
-            async def all(inner_self):  # noqa: ANN001
-                return list(self._entries)
+        entries = self._entries
 
-        return _Query()
+        class _Query:
+            def __init__(self, selected_entries: list[_Entry]) -> None:
+                self._selected_entries = list(selected_entries)
+
+            def last_anchor(inner_self):  # noqa: ANN001
+                last_anchor_id = 0
+                for item in inner_self._selected_entries:
+                    if item.kind == "anchor":
+                        last_anchor_id = item.id
+                if last_anchor_id == 0:
+                    return _Query([])
+                return _Query([item for item in inner_self._selected_entries if item.id > last_anchor_id])
+
+            def after_anchor(inner_self, name: str):  # noqa: ANN001
+                anchor_id = 0
+                for item in inner_self._selected_entries:
+                    if item.kind == "anchor" and item.payload.get("name") == name:
+                        anchor_id = item.id
+                if anchor_id == 0:
+                    return _Query([])
+                return _Query([item for item in inner_self._selected_entries if item.id > anchor_id])
+
+            async def all(inner_self):  # noqa: ANN001
+                return list(inner_self._selected_entries)
+
+        return _Query(entries)
 
 
 class _FakeTapeService:
@@ -66,24 +93,12 @@ class _FakeRuntimeAgent:
         self.tapes = tape_service
 
 
-class _FakeStore:
-    def __init__(self, entries: list[_Entry] | None = None) -> None:
-        self._entries = list(entries or [])
-
-    def read(self, tape_name: str):  # noqa: ANN001
-        del tape_name
-        return list(self._entries)
-
-
 def _build_agent(
     entries: list[_Entry] | None = None,
-    *,
-    store_entries: list[_Entry] | None = None,
 ) -> tuple[BubAgent, _FakeTapeService]:
     tape_service = _FakeTapeService(entries)
     agent = BubAgent.__new__(BubAgent)
-    store = _FakeStore(store_entries) if store_entries is not None else None
-    agent._framework = SimpleNamespace(workspace=".", get_tape_store=lambda: store)
+    agent._framework = SimpleNamespace(workspace=".", get_tape_store=lambda: None)
     agent._runtime_agent = _FakeRuntimeAgent(tape_service)
     agent._workspace = "."
     return agent, tape_service
@@ -123,7 +138,7 @@ def test_snapshot_from_missing_anchor_uses_latest_anchor() -> None:
     assert [entry.id for entry in snapshot.context_entries] == [3]
 
 
-def test_snapshot_from_anchor_without_any_anchor_creates_bootstrap_anchor() -> None:
+def test_snapshot_from_anchor_without_any_anchor_keeps_existing_history() -> None:
     agent, tape_service = _build_agent(
         [
             _Entry(1, "message", {"role": "user", "content": "a"}, {}),
@@ -132,9 +147,10 @@ def test_snapshot_from_anchor_without_any_anchor_creates_bootstrap_anchor() -> N
 
     snapshot = agent.snapshot("gradio:test", view_mode="from-anchor", anchor_name="handoff:not-found")
 
-    assert snapshot.active_anchor is not None
-    assert snapshot.active_anchor.name == "session/start"
-    assert any(entry.kind == "anchor" for entry in tape_service.entries)
+    assert snapshot.active_anchor is None
+    assert [entry.id for entry in snapshot.context_entries] == [1]
+    assert snapshot.messages == [{"role": "user", "content": "a"}]
+    assert not any(entry.kind == "anchor" for entry in tape_service.entries)
 
 
 def test_handoff_normalizes_name_and_appends() -> None:
@@ -195,24 +211,9 @@ def test_estimate_tokens_prefers_usage_event() -> None:
     assert estimate_tokens(entries) == 321
 
 
-def test_snapshot_reads_entries_from_store_when_available() -> None:
-    agent, _ = _build_agent(
-        entries=[],
-        store_entries=[
-            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
-            _Entry(2, "message", {"role": "assistant", "content": "from-store"}, {}),
-        ],
-    )
-
-    snapshot = agent.snapshot("gradio:test", view_mode="latest")
-
-    assert snapshot.total_entries == 2
-    assert snapshot.messages[-1]["content"] == "from-store"
-
-
 def test_snapshot_messages_strip_gradio_context_prefix() -> None:
     agent, _ = _build_agent(
-        store_entries=[
+        [
             _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
             _Entry(
                 2,
@@ -235,3 +236,135 @@ def test_snapshot_messages_strip_gradio_context_prefix() -> None:
         {"role": "user", "content": "hello again"},
         {"role": "assistant", "content": "Hello!"},
     ]
+
+
+def test_snapshot_messages_keep_user_message_for_multi_step_run() -> None:
+    agent, _ = _build_agent(
+        [
+            _Entry(1, "event", {"name": "loop.step.start", "data": {"step": 1}}, {}),
+            _Entry(2, "event", {"name": "loop.step.start", "data": {"step": 2}}, {}),
+            _Entry(3, "system", {"content": "system"}, {"run_id": "r1"}),
+            _Entry(4, "message", {"role": "user", "content": "hello"}, {"run_id": "r1"}),
+            _Entry(5, "message", {"role": "assistant", "content": "done"}, {"run_id": "r1"}),
+        ],
+    )
+
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
+
+    assert snapshot.active_anchor is None
+    assert snapshot.messages == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
+def test_snapshot_latest_messages_follow_latest_anchor() -> None:
+    agent, _ = _build_agent(
+        [
+            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
+            _Entry(2, "message", {"role": "user", "content": "first question"}, {}),
+            _Entry(3, "message", {"role": "assistant", "content": "first answer"}, {}),
+            _Entry(4, "anchor", {"name": "handoff:impl", "state": {"phase": "Implementation"}}, {}),
+            _Entry(5, "message", {"role": "user", "content": "second question"}, {}),
+            _Entry(6, "message", {"role": "assistant", "content": "second answer"}, {}),
+        ]
+    )
+
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
+
+    assert snapshot.messages == [
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": "second answer"},
+    ]
+
+
+def test_snapshot_from_anchor_messages_follow_selected_anchor() -> None:
+    agent, _ = _build_agent(
+        [
+            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
+            _Entry(2, "message", {"role": "user", "content": "first question"}, {}),
+            _Entry(3, "message", {"role": "assistant", "content": "first answer"}, {}),
+            _Entry(4, "anchor", {"name": "handoff:impl", "state": {"phase": "Implementation"}}, {}),
+            _Entry(5, "message", {"role": "user", "content": "second question"}, {}),
+            _Entry(6, "message", {"role": "assistant", "content": "second answer"}, {}),
+            _Entry(7, "anchor", {"name": "handoff:qa", "state": {"phase": "QA"}}, {}),
+            _Entry(8, "message", {"role": "user", "content": "third question"}, {}),
+            _Entry(9, "message", {"role": "assistant", "content": "third answer"}, {}),
+        ]
+    )
+
+    snapshot = agent.snapshot("gradio:test", view_mode="from-anchor", anchor_name="handoff:impl")
+
+    assert snapshot.active_anchor is not None
+    assert snapshot.active_anchor.name == "handoff:impl"
+    assert snapshot.messages == [
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": "second answer"},
+        {"role": "user", "content": "third question"},
+        {"role": "assistant", "content": "third answer"},
+    ]
+
+
+def test_handoff_moves_latest_messages_to_new_anchor_boundary() -> None:
+    agent, _ = _build_agent(
+        [
+            _Entry(1, "anchor", {"name": "session/start", "state": {"owner": "human"}}, {}),
+            _Entry(2, "message", {"role": "user", "content": "first question"}, {}),
+            _Entry(3, "message", {"role": "assistant", "content": "first answer"}, {}),
+        ]
+    )
+
+    agent.handoff("gradio:test", "impl")
+
+    snapshot = agent.snapshot("gradio:test", view_mode="latest")
+
+    assert snapshot.active_anchor is not None
+    assert snapshot.active_anchor.name == "handoff:impl"
+    assert snapshot.messages == []
+
+
+def test_snapshot_latest_creates_bootstrap_anchor_with_real_store(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "tapes.db"
+    monkeypatch.setenv("BUB_TAPESTORE_SQLALCHEMY_URL", f"sqlite+pysqlite:///{db_path}")
+    cached_store.cache_clear()
+
+    framework = BubFramework()
+    framework.load_hooks()
+    agent = BubAgent(framework)
+
+    snapshot = agent.snapshot("gradio:real-bootstrap", view_mode="latest")
+
+    assert [anchor.name for anchor in snapshot.anchors] == ["session/start"]
+    assert snapshot.active_anchor is not None
+    assert snapshot.active_anchor.name == "session/start"
+
+    cached_store.cache_clear()
+
+
+def test_handoff_persists_anchor_with_real_store(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "tapes.db"
+    monkeypatch.setenv("BUB_TAPESTORE_SQLALCHEMY_URL", f"sqlite+pysqlite:///{db_path}")
+    cached_store.cache_clear()
+
+    framework = BubFramework()
+    framework.load_hooks()
+    agent = BubAgent(framework)
+    agent.snapshot("gradio:real-handoff", view_mode="latest")
+
+    normalized = agent.handoff(
+        "gradio:real-handoff",
+        "impl-details",
+        phase="Implementation",
+        summary="Checkpoint",
+        facts=["fact-a"],
+    )
+    snapshot = agent.snapshot("gradio:real-handoff", view_mode="latest")
+
+    assert normalized == "handoff:impl-details"
+    assert [anchor.name for anchor in snapshot.anchors] == ["session/start", "handoff:impl-details"]
+    assert snapshot.active_anchor is not None
+    assert snapshot.active_anchor.name == "handoff:impl-details"
+    assert snapshot.active_anchor.label == "Implementation"
+    assert snapshot.active_anchor.summary == "Checkpoint"
+
+    cached_store.cache_clear()

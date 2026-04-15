@@ -366,14 +366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bub-tapestore-sqlalchemy"
-version = "0.1.0"
-source = { git = "https://github.com/bubbuild/bub-contrib.git?subdirectory=packages%2Fbub-tapestore-sqlalchemy&branch=main#10c4871a34d4869ecbdea87f00bdd0c4fe370bd5" }
-dependencies = [
-    { name = "sqlalchemy" },
-]
-
-[[package]]
 name = "certifi"
 version = "2025.11.12"
 source = { registry = "https://pypi.org/simple" }
@@ -594,7 +586,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "bub" },
-    { name = "bub-tapestore-sqlalchemy" },
     { name = "gradio" },
     { name = "loguru" },
     { name = "pydantic-settings" },
@@ -618,7 +609,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bub", git = "https://github.com/bubbuild/bub.git?tag=0.3.3" },
-    { name = "bub-tapestore-sqlalchemy", git = "https://github.com/bubbuild/bub-contrib.git?subdirectory=packages%2Fbub-tapestore-sqlalchemy&branch=main" },
     { name = "gradio", specifier = ">=4.0.0" },
     { name = "loguru", specifier = ">=0.7.2" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },

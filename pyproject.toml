@@ -10,7 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
     "gradio>=4.0.0",
     "bub==0.3.3",
-    "bub-tapestore-sqlalchemy",
     "loguru>=0.7.2",
     "pydantic-settings>=2.0.0",
     "pymysql>=1.1.0",
@@ -49,7 +48,6 @@ source-includes = ["app.py", "README.md", ".env.example"]
 
 [tool.uv.sources]
 bub = { git = "https://github.com/bubbuild/bub.git", tag = "0.3.3" }
-bub-tapestore-sqlalchemy = { git = "https://github.com/bubbuild/bub-contrib.git", branch = "main", subdirectory = "packages/bub-tapestore-sqlalchemy" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

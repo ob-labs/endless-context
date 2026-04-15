@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import inspect
+from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from typing import Any, Literal
 
 from bub.builtin.agent import Agent as BubRuntimeAgent
+from bub.builtin.context import default_tape_context
 from bub.framework import BubFramework
 from republic.tape import Tape, TapeEntry
+from republic.tape.context import LAST_ANCHOR, TapeContext
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a tape-first assistant. Keep answers concise, grounded in recorded facts, "
@@ -33,12 +37,14 @@ def _strip_bub_context_prefix(content: str) -> str:
     if not separator or "channel=$" not in first_line:
         return content
 
-    date_marker = "---\n"
-    date_offset = remainder.find(date_marker)
-    if date_offset < 0:
+    if not remainder.startswith("---Date:"):
         return content
 
-    stripped = remainder[date_offset + len(date_marker) :].strip()
+    _, date_separator, body = remainder.partition("\n")
+    if not date_separator:
+        return content
+
+    stripped = body.strip()
     return stripped or content
 
 
@@ -59,7 +65,8 @@ class ConversationSnapshot:
     anchors: list[AnchorState]
     active_anchor: AnchorState | None
     context_entries: list[TapeEntry]
-    estimated_tokens: int
+    messages: list[dict[str, str]] = field(default_factory=list)
+    estimated_tokens: int = 0
 
     @property
     def total_entries(self) -> int:
@@ -68,61 +75,6 @@ class ConversationSnapshot:
     @property
     def context_entry_count(self) -> int:
         return len(self.context_entries)
-
-    @property
-    def messages(self) -> list[dict[str, str]]:
-        result: list[dict[str, str]] = []
-        run_step: dict[str, int] = {}
-        current_step = 1
-        for entry in self.entries:
-            kind = getattr(entry, "kind", "")
-            payload = getattr(entry, "payload", {})
-            meta = getattr(entry, "meta", {})
-            if not isinstance(payload, dict):
-                continue
-            if not isinstance(meta, dict):
-                meta = {}
-
-            if kind == "event" and payload.get("name") == "loop.step.start":
-                data = payload.get("data")
-                if isinstance(data, dict):
-                    step = data.get("step")
-                    if isinstance(step, int) and step > 0:
-                        current_step = step
-                continue
-
-            if kind == "system":
-                run_id = meta.get("run_id")
-                if isinstance(run_id, str) and run_id:
-                    run_step[run_id] = current_step
-                continue
-
-            if kind == "message":
-                role = payload.get("role")
-                content = payload.get("content")
-                if role in {"user", "assistant"} and isinstance(content, str):
-                    if role == "user":
-                        run_id = meta.get("run_id")
-                        if isinstance(run_id, str) and run_step.get(run_id, 1) > 1:
-                            continue
-                        content = _strip_bub_context_prefix(content)
-                    result.append({"role": role, "content": content})
-                continue
-
-            if kind != "event" or payload.get("name") != "command":
-                continue
-            data = payload.get("data")
-            if not isinstance(data, dict):
-                continue
-            raw = data.get("raw")
-            output = data.get("output")
-            if isinstance(raw, str) and raw.strip():
-                user_msg = {"role": "user", "content": raw}
-                if not result or result[-1] != user_msg:
-                    result.append(user_msg)
-            if isinstance(output, str) and output.strip():
-                result.append({"role": "assistant", "content": output})
-        return result
 
 
 class BubAgent:
@@ -147,20 +99,61 @@ class BubAgent:
             anchor_name=anchor_name,
             ensure_anchor=view_mode != "full",
         )
-        active_anchor, context_entries = select_context_entries(
-            entries,
-            anchors,
-            resolved_mode,
-            resolved_anchor_name,
-        )
+        active_anchor = resolve_active_anchor(anchors, resolved_mode, resolved_anchor_name)
+        if resolved_mode == "full" or not anchors:
+            context_entries = entries
+        else:
+            context_entries = self._read_context_entries(tape, resolved_mode, resolved_anchor_name)
         return ConversationSnapshot(
             tape_name=tape.name,
             entries=entries,
             anchors=anchors,
             active_anchor=active_anchor,
             context_entries=context_entries,
+            messages=extract_conversation_messages(context_entries),
             estimated_tokens=estimate_tokens(context_entries),
         )
+
+    async def run(
+        self,
+        session_id: str,
+        *,
+        prompt: str | list[dict],
+        state: dict[str, object],
+        allowed_tools: set[str] | None = None,
+    ) -> str:
+        tape = self._session_tape(session_id)
+        requested_view_mode = _coerce_view_mode(state.get("_gradio_view_mode"))
+        requested_anchor_name = _coerce_anchor_name(state.get("_gradio_anchor_name"))
+        resolved_mode, resolved_anchor_name, _, anchors = await self._resolve_view_async(
+            tape=tape,
+            view_mode=requested_view_mode,
+            anchor_name=requested_anchor_name,
+            ensure_anchor=requested_view_mode != "full",
+        )
+        runtime_context = build_runtime_tape_context(
+            view_mode=resolved_mode,
+            anchor_name=resolved_anchor_name,
+            state=dict(state),
+            has_anchor=bool(anchors),
+        )
+        tape.context = dc_replace(
+            tape.context,
+            anchor=runtime_context.anchor,
+            select=runtime_context.select,
+            state=runtime_context.state,
+        )
+
+        merge_back = not session_id.startswith("temp/")
+        async with self._runtime_agent.tapes.fork_tape(tape.name, merge_back=merge_back):
+            await self._runtime_agent.tapes.ensure_bootstrap_anchor(tape.name)
+            if isinstance(prompt, str) and prompt.strip().startswith(","):
+                return await self._runtime_agent._run_command(tape=tape, line=prompt.strip())
+            return await self._runtime_agent._agent_loop(
+                tape=tape,
+                prompt=prompt,
+                allowed_tools=allowed_tools,
+            )
 
     def append_context_selection_event(
         self,
@@ -172,18 +165,16 @@ class BubAgent:
         estimated_tokens: int,
     ) -> None:
         tape = self._session_tape(session_id)
-        _run_async(
-            self._runtime_agent.tapes.append_event(
-                tape.name,
-                "gradio.context_selection",
-                {
-                    "view_mode": view_mode,
-                    "anchor_name": anchor_name,
-                    "context_entry_count": context_entry_count,
-                    "estimated_tokens": estimated_tokens,
-                },
-            )
-        )
+        payload = {
+            "view_mode": view_mode,
+            "anchor_name": anchor_name,
+            "context_entry_count": context_entry_count,
+            "estimated_tokens": estimated_tokens,
+        }
+        if self._framework.get_tape_store() is None:
+            _run_async(self._runtime_agent.tapes.append_event(tape.name, "gradio.context_selection", payload))
+            return
+        self._append_entry_sync(tape.name, TapeEntry.event("gradio.context_selection", payload))
 
     def handoff(
         self,
@@ -205,86 +196,120 @@ class BubAgent:
             if clean_facts:
                 state["facts"] = clean_facts
         tape = self._session_tape(session_id)
-        _run_async(self._runtime_agent.tapes.handoff(tape.name, name=normalized, state=state or None))
+        if self._framework.get_tape_store() is None:
+            _run_async(self._runtime_agent.tapes.handoff(tape.name, name=normalized, state=state or None))
+            return normalized
+        self._append_handoff_sync(tape.name, normalized, state or None)
         return normalized
 
     def reset(self, session_id: str) -> None:
         tape = self._session_tape(session_id)
-        _run_async(
-            self._runtime_agent.tapes.append_event(
-                tape.name,
+        if self._framework.get_tape_store() is None:
+            _run_async(
+                self._runtime_agent.tapes.append_event(
+                    tape.name,
+                    "gradio.tape_archived",
+                    {
+                        "old_tape": tape.name,
+                        "reason": "user_reset",
+                    },
+                )
+            )
+            _run_async(self._runtime_agent.tapes.reset(tape.name, archive=True))
+            return
+        self._append_entry_sync(
+            tape.name,
+            TapeEntry.event(
                 "gradio.tape_archived",
                 {
                     "old_tape": tape.name,
                     "reason": "user_reset",
                 },
-            )
+            ),
         )
-        _run_async(self._runtime_agent.tapes.reset(tape.name, archive=True))
+        self._reset_tape_sync(tape.name)
+        self._append_handoff_sync(tape.name, AUTO_BOOTSTRAP_ANCHOR, {"owner": "human"})
 
     def _session_tape(self, session_id: str) -> Tape:
         return self._runtime_agent.tapes.session_tape(session_id, self._workspace)
 
     def _read_entries(self, tape: Tape) -> list[TapeEntry]:
-        direct_entries = self._read_entries_from_store(tape.name)
-        if direct_entries is not None:
-            return direct_entries
         entries = _run_async(tape.query_async.all())
         return list(entries)
 
-    def _read_entries_from_store(self, tape_name: str) -> list[TapeEntry] | None:
-        store = self._framework.get_tape_store()
-        if store is None:
-            return None
+    async def _read_entries_async(self, tape: Tape) -> list[TapeEntry]:
+        entries = await tape.query_async.all()
+        return list(entries)
 
-        read = getattr(store, "read", None)
-        if callable(read):
-            entries = read(tape_name)
-            if entries is not None:
-                return list(entries)
+    def _read_context_entries(self, tape: Tape, view_mode: ViewMode, anchor_name: str | None) -> list[TapeEntry]:
+        context = build_runtime_tape_context(view_mode=view_mode, anchor_name=anchor_name, state={})
+        query = context.build_query(tape.query_async)
+        return list(_run_async(query.all()))
 
-        if store.__class__.__name__ != "SQLAlchemyTapeStore":
-            return None
-
-        session_factory = getattr(store, "_session_factory", None)
-        if session_factory is None:
-            return None
-
-        try:
-            from bub_tapestore_sqlalchemy.models import TapeEntryRecord, TapeRecord
-            from sqlalchemy import select
-        except Exception:
-            return None
-
-        with session_factory() as session:
-            tape_record = session.scalar(select(TapeRecord).where(TapeRecord.name == tape_name))
-            if tape_record is None:
-                return []
-            records = session.scalars(
-                select(TapeEntryRecord)
-                .where(TapeEntryRecord.tape_id == tape_record.id)
-                .order_by(TapeEntryRecord.entry_id)
-            ).all()
-
-        return [
-            TapeEntry(
-                id=record.entry_id,
-                kind=record.kind,
-                payload=dict(record.payload) if isinstance(record.payload, dict) else {},
-                meta=dict(record.meta) if isinstance(record.meta, dict) else {},
-                date=record.entry_date,
-            )
-            for record in records
-        ]
+    async def _read_context_entries_async(
+        self, tape: Tape, view_mode: ViewMode, anchor_name: str | None
+    ) -> list[TapeEntry]:
+        context = build_runtime_tape_context(view_mode=view_mode, anchor_name=anchor_name, state={})
+        query = context.build_query(tape.query_async)
+        return list(await query.all())
 
     def _create_bootstrap_anchor(self, tape: Tape) -> tuple[list[TapeEntry], list[AnchorState], AnchorState | None]:
-        _run_async(self._runtime_agent.tapes.ensure_bootstrap_anchor(tape.name))
+        if self._framework.get_tape_store() is None:
+            _run_async(self._runtime_agent.tapes.ensure_bootstrap_anchor(tape.name))
+        else:
+            self._append_handoff_sync(tape.name, AUTO_BOOTSTRAP_ANCHOR, dict(AUTO_BOOTSTRAP_STATE))
         entries = self._read_entries(tape)
         anchors = extract_anchors(entries)
         created = find_anchor_by_name(anchors, AUTO_BOOTSTRAP_ANCHOR)
         if created is None and anchors:
             created = anchors[-1]
         return entries, anchors, created
+
+    async def _create_bootstrap_anchor_async(
+        self, tape: Tape
+    ) -> tuple[list[TapeEntry], list[AnchorState], AnchorState | None]:
+        if self._framework.get_tape_store() is None:
+            await self._runtime_agent.tapes.ensure_bootstrap_anchor(tape.name)
+        else:
+            await self._append_handoff_async(tape.name, AUTO_BOOTSTRAP_ANCHOR, dict(AUTO_BOOTSTRAP_STATE))
+        entries = await self._read_entries_async(tape)
+        anchors = extract_anchors(entries)
+        created = find_anchor_by_name(anchors, AUTO_BOOTSTRAP_ANCHOR)
+        if created is None and anchors:
+            created = anchors[-1]
+        return entries, anchors, created
+
+    def _append_handoff_sync(self, tape_name: str, name: str, state: dict[str, Any] | None) -> None:
+        self._append_entry_sync(tape_name, TapeEntry.anchor(name, state=state))
+        self._append_entry_sync(tape_name, TapeEntry.event("handoff", {"name": name, "state": state or {}}))
+
+    async def _append_handoff_async(self, tape_name: str, name: str, state: dict[str, Any] | None) -> None:
+        await self._append_entry_async(tape_name, TapeEntry.anchor(name, state=state))
+        await self._append_entry_async(tape_name, TapeEntry.event("handoff", {"name": name, "state": state or {}}))
+
+    def _append_entry_sync(self, tape_name: str, entry: TapeEntry) -> None:
+        store = self._framework.get_tape_store()
+        if store is None:
+            raise RuntimeError("tape store is not configured")
+        result = store.append(tape_name, entry)
+        if inspect.isawaitable(result):
+            _run_async(result)
+
+    async def _append_entry_async(self, tape_name: str, entry: TapeEntry) -> None:
+        store = self._framework.get_tape_store()
+        if store is None:
+            raise RuntimeError("tape store is not configured")
+        result = store.append(tape_name, entry)
+        if inspect.isawaitable(result):
+            await result
+
+    def _reset_tape_sync(self, tape_name: str) -> None:
+        store = self._framework.get_tape_store()
+        if store is None:
+            raise RuntimeError("tape store is not configured")
+        result = store.reset(tape_name)
+        if inspect.isawaitable(result):
+            _run_async(result)
 
     def _resolve_view(
         self,
@@ -301,7 +326,7 @@ class BubAgent:
             return "full", None, entries, anchors
 
         if view_mode == "latest":
-            if not anchors and ensure_anchor:
+            if not anchors and ensure_anchor and not entries:
                 entries, anchors, _ = self._create_bootstrap_anchor(tape)
             resolved_anchor_name = anchors[-1].name if anchors else None
             return "latest", resolved_anchor_name, entries, anchors
@@ -309,8 +334,36 @@ class BubAgent:
         target = find_anchor_by_name(anchors, anchor_name) if anchor_name else None
         if target is None and anchors:
             target = anchors[-1]
-        if target is None and ensure_anchor:
+        if target is None and ensure_anchor and not entries:
             entries, anchors, target = self._create_bootstrap_anchor(tape)
+        resolved_anchor_name = target.name if target else None
+        return "from-anchor", resolved_anchor_name, entries, anchors
+
+    async def _resolve_view_async(
+        self,
+        *,
+        tape: Tape,
+        view_mode: ViewMode,
+        anchor_name: str | None,
+        ensure_anchor: bool,
+    ) -> tuple[ViewMode, str | None, list[TapeEntry], list[AnchorState]]:
+        entries = await self._read_entries_async(tape)
+        anchors = extract_anchors(entries)
+
+        if view_mode == "full":
+            return "full", None, entries, anchors
+
+        if view_mode == "latest":
+            if not anchors and ensure_anchor and not entries:
+                entries, anchors, _ = await self._create_bootstrap_anchor_async(tape)
+            resolved_anchor_name = anchors[-1].name if anchors else None
+            return "latest", resolved_anchor_name, entries, anchors
+
+        target = find_anchor_by_name(anchors, anchor_name) if anchor_name else None
+        if target is None and anchors:
+            target = anchors[-1]
+        if target is None and ensure_anchor and not entries:
+            entries, anchors, target = await self._create_bootstrap_anchor_async(tape)
         resolved_anchor_name = target.name if target else None
         return "from-anchor", resolved_anchor_name, entries, anchors
 
@@ -374,21 +427,83 @@ def find_anchor_by_name(anchors: list[AnchorState], anchor_name: str | None) -> 
     return None
 
 
-def select_context_entries(
-    entries: list[TapeEntry],
+def resolve_active_anchor(
     anchors: list[AnchorState],
     view_mode: ViewMode,
     anchor_name: str | None,
-) -> tuple[AnchorState | None, list[TapeEntry]]:
-    if view_mode == "full":
-        return None, list(entries)
-    if not anchors:
-        return None, list(entries)
+) -> AnchorState | None:
+    if view_mode == "full" or not anchors:
+        return None
     if view_mode == "latest":
-        active_anchor = anchors[-1]
+        return anchors[-1]
+    return find_anchor_by_name(anchors, anchor_name) or anchors[-1]
+
+
+def build_runtime_tape_context(
+    *,
+    view_mode: ViewMode,
+    anchor_name: str | None,
+    state: dict[str, object],
+    has_anchor: bool = True,
+) -> TapeContext:
+    anchor: str | None | object
+    if view_mode == "full" or not has_anchor:
+        anchor = None
+    elif view_mode == "latest":
+        anchor = LAST_ANCHOR
     else:
-        active_anchor = find_anchor_by_name(anchors, anchor_name) or anchors[-1]
-    return active_anchor, entries_after_id(entries, active_anchor.entry_id)
+        anchor = anchor_name or LAST_ANCHOR
+    return TapeContext(
+        anchor=anchor,
+        select=default_tape_context().select,
+        state=state,
+    )
+
+
+def extract_conversation_messages(entries: list[TapeEntry]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for entry in entries:
+        kind = getattr(entry, "kind", "")
+        payload = getattr(entry, "payload", {})
+        if not isinstance(payload, dict):
+            continue
+
+        if kind == "message":
+            role = payload.get("role")
+            content = payload.get("content")
+            if role in {"user", "assistant"} and isinstance(content, str):
+                if role == "user":
+                    content = _strip_bub_context_prefix(content)
+                result.append({"role": role, "content": content})
+            continue
+
+        if kind != "event" or payload.get("name") != "command":
+            continue
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            continue
+        raw = data.get("raw")
+        output = data.get("output")
+        if isinstance(raw, str) and raw.strip():
+            user_msg = {"role": "user", "content": raw}
+            if not result or result[-1] != user_msg:
+                result.append(user_msg)
+        if isinstance(output, str) and output.strip():
+            result.append({"role": "assistant", "content": output})
+    return result
+
+
+def _coerce_view_mode(value: object) -> ViewMode:
+    if value in {"full", "latest", "from-anchor"}:
+        return value
+    return "latest"
+
+
+def _coerce_anchor_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def entries_after_id(entries: list[TapeEntry], entry_id: int) -> list[TapeEntry]:

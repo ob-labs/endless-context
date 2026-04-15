@@ -3,14 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from bub import hookimpl
-from bub.builtin.agent import Agent as RuntimeAgent
 from bub.channels import Channel
 from bub.envelope import field_of
 from bub.framework import BubFramework
 from bub.tools import resolve_tool_names
 from bub.types import MessageHandler
 
-from endless_context.agent import DEFAULT_SYSTEM_PROMPT
+from endless_context.agent import DEFAULT_SYSTEM_PROMPT, BubAgent
 from endless_context.channel import GradioChannel
 
 GRADIO_SYSTEM_PROMPT = (
@@ -27,7 +26,7 @@ class EndlessContextPlugin:
         from bub.builtin import tools as _builtin_tools  # noqa: F401
 
         self._framework = framework
-        self._runtime_agent = RuntimeAgent(framework)
+        self._runtime_agent = BubAgent(framework)
 
     @hookimpl
     def provide_channels(self, message_handler: MessageHandler) -> list[Channel]:
@@ -36,13 +35,23 @@ class EndlessContextPlugin:
     @hookimpl
     def load_state(self, message: Any, session_id: str) -> dict[str, object]:
         del session_id
+        state: dict[str, object] = {}
         channel_name = field_of(message, "channel")
-        if channel_name is None:
-            return {}
-        return {"_channel_name": str(channel_name)}
+        if channel_name is not None:
+            state["_channel_name"] = str(channel_name)
 
-    @hookimpl
-    async def run_model_stream(self, prompt: str | list[dict], session_id: str, state: dict[str, object]):
+        view_mode = field_of(message, "view_mode")
+        if isinstance(view_mode, str) and view_mode in {"full", "latest", "from-anchor"}:
+            state["_gradio_view_mode"] = view_mode
+
+        anchor_name = field_of(message, "anchor_name")
+        if isinstance(anchor_name, str) and anchor_name.strip():
+            state["_gradio_anchor_name"] = anchor_name.strip()
+
+        return state
+
+    @hookimpl(tryfirst=True)
+    async def run_model(self, prompt: str | list[dict], session_id: str, state: dict[str, object]):
         if state.get("_channel_name") != "gradio":
             return None
         allowed_tools = resolve_tool_names(None, exclude={"quit"})

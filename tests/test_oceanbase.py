@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import sys
-from types import ModuleType
+from pathlib import Path
 
 import pymysql
-import pytest
+from republic.tape import TapeEntry, TapeQuery
 
-from endless_context import oceanbase
+from endless_context.oceanbase import _is_savepoint_not_exist
+from endless_context.tape_store import SQLAlchemyTapeStore
 
 
 def test_is_savepoint_not_exist_accepts_nested_operational_error() -> None:
@@ -17,47 +17,31 @@ def test_is_savepoint_not_exist_accepts_nested_operational_error() -> None:
             super().__init__("wrapped")
             self.orig = orig
 
-    assert oceanbase._is_savepoint_not_exist(error) is True
-    assert oceanbase._is_savepoint_not_exist(WrappedError(error)) is True
+    assert _is_savepoint_not_exist(error) is True
+    assert _is_savepoint_not_exist(WrappedError(error)) is True
 
 
-def test_patch_tape_store_validate_schema_ignores_duplicate_index(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("bub_tapestore_sqlalchemy")
-    store_module = ModuleType("bub_tapestore_sqlalchemy.store")
+def test_sqlalchemy_tape_store_reads_current_query_shape(tmp_path: Path) -> None:
+    db_path = tmp_path / "tapes.db"
+    store = SQLAlchemyTapeStore(url=f"sqlite+pysqlite:///{db_path}")
+    store.append("t1", TapeEntry.anchor("session/start", state={"owner": "human"}))
+    store.append("t1", TapeEntry.message({"role": "user", "content": "hello"}))
+    store.append("t1", TapeEntry.message({"role": "assistant", "content": "world"}))
 
-    class DuplicateIndexError(Exception):
-        def __init__(self) -> None:
-            super().__init__("Duplicate key name 'idx_tape_entries_anchor_name_key'")
-            self.orig = type("orig", (), {"args": (1061, "Duplicate key name")})()
+    entries = list(store.fetch_all(TapeQuery(tape="t1", store=store).last_anchor()))
 
-    class FakeTapeStore:
-        def _validate_schema(self) -> None:
-            raise DuplicateIndexError()
-
-    store_module.SQLAlchemyTapeStore = FakeTapeStore
-    module.store = store_module
-    monkeypatch.setitem(sys.modules, "bub_tapestore_sqlalchemy", module)
-    monkeypatch.setitem(sys.modules, "bub_tapestore_sqlalchemy.store", store_module)
-
-    oceanbase._patch_tape_store_validate_schema()
-
-    FakeTapeStore()._validate_schema()
+    assert [entry.kind for entry in entries] == ["message", "message"]
+    assert entries[0].payload == {"role": "user", "content": "hello"}
+    assert entries[1].payload == {"role": "assistant", "content": "world"}
 
 
-def test_patch_tape_store_validate_schema_preserves_unrelated_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("bub_tapestore_sqlalchemy")
-    store_module = ModuleType("bub_tapestore_sqlalchemy.store")
+def test_sqlalchemy_tape_store_filters_between_dates(tmp_path: Path) -> None:
+    db_path = tmp_path / "tapes.db"
+    store = SQLAlchemyTapeStore(url=f"sqlite+pysqlite:///{db_path}")
+    store.append("t1", TapeEntry(0, "message", {"role": "user", "content": "early"}, {}, "2026-04-14T00:00:00Z"))
+    store.append("t1", TapeEntry(0, "message", {"role": "user", "content": "late"}, {}, "2026-04-15T00:00:00Z"))
 
-    class FakeTapeStore:
-        def _validate_schema(self) -> None:
-            raise RuntimeError("boom")
+    entries = list(store.fetch_all(TapeQuery(tape="t1", store=store).between_dates("2026-04-15", "2026-04-15")))
 
-    store_module.SQLAlchemyTapeStore = FakeTapeStore
-    module.store = store_module
-    monkeypatch.setitem(sys.modules, "bub_tapestore_sqlalchemy", module)
-    monkeypatch.setitem(sys.modules, "bub_tapestore_sqlalchemy.store", store_module)
-
-    oceanbase._patch_tape_store_validate_schema()
-
-    with pytest.raises(RuntimeError, match="boom"):
-        FakeTapeStore()._validate_schema()
+    assert len(entries) == 1
+    assert entries[0].payload["content"] == "late"

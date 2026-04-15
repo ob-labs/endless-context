@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import html
 import json
 import threading
@@ -15,8 +14,6 @@ from bub.framework import BubFramework
 from bub.types import MessageHandler
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from republic import ErrorPayload
-from republic.core.errors import ErrorKind
 
 from endless_context.agent import BubAgent, ConversationSnapshot, ViewMode
 
@@ -290,8 +287,14 @@ class GradioChannel(Channel):
             raise RuntimeError("gradio channel is not running yet")
         return self._loop
 
-    def _build_inbound_message(self, session_id: str, content: str) -> ChannelMessage:
-        return ChannelMessage(
+    def _build_inbound_message(
+        self,
+        session_id: str,
+        content: str,
+        view_mode: ViewMode,
+        anchor_name: str | None,
+    ) -> ChannelMessage:
+        message = ChannelMessage(
             session_id=session_id,
             channel=self.name,
             chat_id=self._chat_id_from_session(session_id),
@@ -300,8 +303,17 @@ class GradioChannel(Channel):
             is_active=True,
             context={"surface": "gradio"},
         )
+        message.view_mode = view_mode
+        message.anchor_name = anchor_name
+        return message
 
-    def _dispatch_and_wait(self, session_id: str, content: str) -> str:
+    def _dispatch_and_wait(
+        self,
+        session_id: str,
+        content: str,
+        view_mode: ViewMode,
+        anchor_name: str | None,
+    ) -> str:
         loop = self._require_loop()
         pending = PendingTurn()
         with self._pending_lock:
@@ -312,7 +324,14 @@ class GradioChannel(Channel):
         try:
             logger.info("gradio.inbound session_id={} content={}", session_id, _preview_text(content))
             future = asyncio.run_coroutine_threadsafe(
-                self._on_receive(self._build_inbound_message(session_id=session_id, content=content)),
+                self._on_receive(
+                    self._build_inbound_message(
+                        session_id=session_id,
+                        content=content,
+                        view_mode=view_mode,
+                        anchor_name=anchor_name,
+                    )
+                ),
                 loop,
             )
             future.result(timeout=self._config.enqueue_timeout_seconds)
@@ -410,7 +429,7 @@ class GradioChannel(Channel):
 
         def _worker() -> None:
             try:
-                state["reply"] = self._dispatch_and_wait(session_id, text)
+                state["reply"] = self._dispatch_and_wait(session_id, text, view_mode, anchor_name)
             except Exception as exc:
                 state["error"] = exc
             finally:
@@ -517,46 +536,6 @@ _ORDERED_KEYS: dict[str, list[str]] = {
 }
 
 
-def _format_error_payload_data(data: dict[str, Any]) -> str:
-    """Format dicts matching republic 0.5.x ErrorPayload.as_dict() (tape error entries)."""
-    kind_raw = data.get("kind")
-    message = data.get("message")
-    details = data.get("details")
-    details_dict = details if isinstance(details, dict) else None
-
-    kind: ErrorKind | None = None
-    if isinstance(kind_raw, str) and kind_raw.strip():
-        with contextlib.suppress(ValueError):
-            kind = ErrorKind(kind_raw.strip())
-
-    if kind is not None and isinstance(message, str):
-        text = str(ErrorPayload(kind, message, details_dict))
-        if details_dict:
-            extra = json.dumps(details_dict, ensure_ascii=False, separators=(",", ":"))
-            if len(extra) > 200:
-                extra = extra[:197] + "…"
-            return f"{text}\n{extra}"
-        return text
-
-    parts: list[str] = []
-    if isinstance(message, str) and message.strip():
-        line = message.strip()
-        if isinstance(kind_raw, str) and kind_raw.strip():
-            line = f"[{kind_raw.strip()}] {line}"
-        parts.append(line)
-    elif isinstance(kind_raw, str) and kind_raw.strip():
-        parts.append(f"[{kind_raw.strip()}]")
-    if not parts:
-        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))[:200]
-    head = parts[0]
-    if isinstance(details, dict) and details:
-        det = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
-        if len(det) > 120:
-            det = det[:117] + "…"
-        return f"{head}\n{det}"
-    return head
-
-
 def _args_summary(arguments: Any, max_values: int = 4, max_len: int = 24) -> str:
     obj: dict[str, Any] | None = None
     if isinstance(arguments, dict):
@@ -579,9 +558,6 @@ def _args_summary(arguments: Any, max_values: int = 4, max_len: int = 24) -> str
 
 
 def _human_text(kind: str, payload: dict[str, Any]) -> str:
-    if kind == "error":
-        return _format_error_payload_data(payload)
-
     calls = payload.get("calls")
     if isinstance(calls, list) and calls:
         parts: list[str] = []
@@ -718,20 +694,6 @@ def _render_structured(kind: str, payload: dict[str, Any]) -> str:
     return "<div class='entry-structured'>{}</div>".format("".join(out))
 
 
-def _render_entry_meta_block(entry: Any) -> str:
-    date_val = getattr(entry, "date", None)
-    meta = getattr(entry, "meta", None)
-    if not date_val and not (isinstance(meta, dict) and meta):
-        return ""
-    rows: list[str] = []
-    if date_val:
-        rows.append(_kv_row("date", date_val))
-    if isinstance(meta, dict):
-        for meta_key, meta_value in meta.items():
-            rows.append(_kv_row(str(meta_key), meta_value))
-    return f"<div class='entry-meta-block'><div class='entry-meta-title'>Entry metadata</div>{''.join(rows)}</div>"
-
-
 def _render_log_html(snapshot: ConversationSnapshot, show_system_events: bool = False) -> str:
     context_ids = {entry.id for entry in snapshot.context_entries}
     active_anchor_id = snapshot.active_anchor.entry_id if snapshot.active_anchor else None
@@ -750,30 +712,18 @@ def _render_log_html(snapshot: ConversationSnapshot, show_system_events: bool = 
         if not isinstance(payload, dict):
             payload = {}
         human = html.escape(_human_text(entry.kind, payload))
-        meta_block = _render_entry_meta_block(entry)
         structured = _render_structured(entry.kind, payload)
         raw_payload = html.escape(json.dumps(payload, ensure_ascii=False, indent=2))
-        meta_raw = html.escape(
-            json.dumps(
-                getattr(entry, "meta", {}) if isinstance(getattr(entry, "meta", None), dict) else {},
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        date_raw = html.escape(str(getattr(entry, "date", "")))
         rows.append(
             f"<details class='{' '.join(classes)}' title='Entry #{entry.id}'>"
             "<summary class='entry-summary'>"
             f"<span class='entry-badge'>{_kind_label(entry.kind)}</span>"
             f"<span class='entry-text'>{human}</span>"
             "</summary>"
-            f"{meta_block}"
             f"{structured}"
             "<details class='entry-raw-block'>"
-            "<summary class='entry-raw-summary'>Raw fields</summary>"
-            f"<pre class='entry-raw'>{meta_raw}</pre>"
-            f"<div class='entry-raw-label'>date</div><pre class='entry-raw'>{date_raw}</pre>"
-            f"<div class='entry-raw-label'>payload</div><pre class='entry-raw'>{raw_payload}</pre>"
+            "<summary class='entry-raw-summary'>Raw payload</summary>"
+            f"<pre class='entry-raw'>{raw_payload}</pre>"
             "</details>"
             "</details>"
         )
@@ -903,22 +853,8 @@ CSS = """
 .entry-call-title, .entry-result-title {
   font-size: 11px; font-weight: 600; opacity: 0.8; margin-bottom: 6px;
 }
-.entry-meta-block {
-  margin: 8px 0 6px 0;
-  padding: 8px;
-  border-radius: 6px;
-  border: 1px dashed var(--border-color-primary);
-  background: color-mix(in srgb, var(--body-text-color) 2%, transparent);
-}
-.entry-meta-title {
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.75;
-  margin-bottom: 6px;
-}
 .entry-raw-block { margin: 0 0 2px 0; }
 .entry-raw-summary { cursor: pointer; font-size: 12px; opacity: 0.8; }
-.entry-raw-label { font-size: 11px; opacity: 0.65; margin: 8px 0 2px 0; }
 .entry-raw {
   margin: 6px 0 0 0;
   padding: 8px;
