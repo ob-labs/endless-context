@@ -36,7 +36,7 @@ The old private `AppRuntime`, custom tape store, and monkey patches inside the a
 
 1) Keep the provided `Dockerfile` and `docker/entrypoint.sh`.
 2) Exposed ports: `7860` (Gradio) and `2881` (SeekDB). Entry file is `app.py`.
-3) Set environment secrets in Studio, e.g. `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`, `BUB_TAPESTORE_SQLALCHEMY_URL`, and the `OCEANBASE_*` values required by your seekdb deployment.
+3) Set environment secrets in Studio, e.g. `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`, and `BUB_TAPESTORE_SQLALCHEMY_URL`.
 4) Build and run. `app.py` starts Bub's channel manager with `gradio` enabled, so opening the forwarded `7860` port reaches the Bub channel directly.
 
 ## Run locally (preferred: Docker)
@@ -47,6 +47,7 @@ cp .env.example .env   # fill in keys
 make compose-up        # builds and starts everything
 ```
 The UI is at `http://localhost:7860`. In Compose mode, SeekDB is only exposed on the internal Docker network so local port conflicts on `2881` do not block startup. Stop with `make compose-down`.
+The app service uses an explicit `BUB_TAPESTORE_SQLALCHEMY_URL` that points at the `seekdb` container.
 
 ### Single container
 ```bash
@@ -60,6 +61,7 @@ uv sync
 cp .env.example .env
 make run
 ```
+For bare-metal, set `BUB_TAPESTORE_SQLALCHEMY_URL` to the actual reachable SeekDB endpoint before starting the app.
 
 ### Bub CLI shape
 

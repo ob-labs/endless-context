@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from bub.framework import BubFramework
+from bub_tapestore_sqlalchemy.plugin import _store
 
 from endless_context.agent import BubAgent, estimate_tokens
-from endless_context.tape_store import cached_store
 
 
 @dataclass
@@ -326,7 +326,7 @@ def test_handoff_moves_latest_messages_to_new_anchor_boundary() -> None:
 def test_snapshot_latest_creates_bootstrap_anchor_with_real_store(monkeypatch, tmp_path: Path) -> None:
     db_path = tmp_path / "tapes.db"
     monkeypatch.setenv("BUB_TAPESTORE_SQLALCHEMY_URL", f"sqlite+pysqlite:///{db_path}")
-    cached_store.cache_clear()
+    _store.cache_clear()
 
     framework = BubFramework()
     framework.load_hooks()
@@ -338,13 +338,13 @@ def test_snapshot_latest_creates_bootstrap_anchor_with_real_store(monkeypatch, t
     assert snapshot.active_anchor is not None
     assert snapshot.active_anchor.name == "session/start"
 
-    cached_store.cache_clear()
+    _store.cache_clear()
 
 
 def test_handoff_persists_anchor_with_real_store(monkeypatch, tmp_path: Path) -> None:
     db_path = tmp_path / "tapes.db"
     monkeypatch.setenv("BUB_TAPESTORE_SQLALCHEMY_URL", f"sqlite+pysqlite:///{db_path}")
-    cached_store.cache_clear()
+    _store.cache_clear()
 
     framework = BubFramework()
     framework.load_hooks()
@@ -367,4 +367,4 @@ def test_handoff_persists_anchor_with_real_store(monkeypatch, tmp_path: Path) ->
     assert snapshot.active_anchor.label == "Implementation"
     assert snapshot.active_anchor.summary == "Checkpoint"
 
-    cached_store.cache_clear()
+    _store.cache_clear()

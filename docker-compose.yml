@@ -26,8 +26,6 @@ services:
     env_file:
       - .env
     environment:
-      OCEANBASE_HOST: seekdb
-      OCEANBASE_PORT: 2881
       BUB_GRADIO_HOST: 0.0.0.0
       BUB_GRADIO_PORT: 7860
       BUB_WORKSPACE_PATH: /app

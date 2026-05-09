@@ -8,9 +8,6 @@ Endless Context is a Bub extension package focused on one deployment shape:
 - Gradio is exposed as a Bub channel
 - tape persistence is delegated to `bub-tapestore-sqlalchemy`
 - OceanBase/seekdb support is provided through a thin compatibility plugin
-- the original three-pane Gradio UI/UX is preserved above the new runtime shape
-
-This keeps the project close to the upstream Bub extension model and removes the old app-local runtime hacks.
 
 ## Architecture
 
@@ -58,7 +55,8 @@ docker run --rm -p 7860:7860 -p 2881:2881 endless-context:latest
 - `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`
 - `BUB_TAPESTORE_SQLALCHEMY_URL`
 - `BUB_GRADIO_HOST`, `BUB_GRADIO_PORT`
-- `OCEANBASE_HOST`, `OCEANBASE_PORT`, `OCEANBASE_USER`, `OCEANBASE_PASSWORD`, `OCEANBASE_DATABASE`
+
+`BUB_TAPESTORE_SQLALCHEMY_URL` is the single database configuration source. The checked-in `.env.example` points at `seekdb` for Docker Compose; for bare-metal or the single-container image, change it to the actual reachable SeekDB endpoint.
 
 ## Development workflow (Makefile)
 

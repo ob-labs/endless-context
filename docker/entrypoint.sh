@@ -38,30 +38,37 @@ start_seekdb() {
   exit 1
 }
 
-build_tapestore_url() {
+parse_tapestore_url() {
   python3.12 - <<'PY'
 import os
-from urllib.parse import quote
+import shlex
+from urllib.parse import unquote, urlsplit
 
-user = os.getenv("OCEANBASE_USER", "root")
-password = os.getenv("OCEANBASE_PASSWORD", "") or os.getenv("ROOT_PASSWORD", "")
-host = os.getenv("OCEANBASE_HOST", "127.0.0.1")
-port = os.getenv("OCEANBASE_PORT", "2881")
-database = os.getenv("OCEANBASE_DATABASE", "bub")
+url = os.getenv("BUB_TAPESTORE_SQLALCHEMY_URL", "").strip()
+if not url:
+    raise SystemExit("BUB_TAPESTORE_SQLALCHEMY_URL must be set")
 
-auth = quote(user, safe="")
-if password:
-    auth += ":" + quote(password, safe="")
+parts = urlsplit(url)
+host = parts.hostname
+database = parts.path.lstrip("/")
+if not host:
+    raise SystemExit(f"BUB_TAPESTORE_SQLALCHEMY_URL must include a hostname: {url}")
+if not database:
+    raise SystemExit(f"BUB_TAPESTORE_SQLALCHEMY_URL must include a database name: {url}")
 
-print(f"mysql+oceanbase://{auth}@{host}:{port}/{database}")
+port = str(parts.port or 2881)
+user = unquote(parts.username) if parts.username is not None else "root"
+password = unquote(parts.password) if parts.password is not None else ""
+
+print(f"db_host={shlex.quote(host)}")
+print(f"db_port={shlex.quote(port)}")
+print(f"db_user={shlex.quote(user)}")
+print(f"db_name={shlex.quote(database)}")
+print(f"db_pass={shlex.quote(password)}")
 PY
 }
 
-db_host="${OCEANBASE_HOST:-127.0.0.1}"
-db_port="${OCEANBASE_PORT:-2881}"
-db_user="${OCEANBASE_USER:-root}"
-db_name="${OCEANBASE_DATABASE:-bub}"
-db_pass="${OCEANBASE_PASSWORD:-${ROOT_PASSWORD:-}}"
+eval "$(parse_tapestore_url)"
 start_local_seekdb="${START_LOCAL_SEEKDB:-auto}"
 
 if [ "${start_local_seekdb}" = "auto" ]; then
@@ -111,12 +118,7 @@ export BUB_HOME="${BUB_HOME:-/app/.bub}"
 export BUB_WORKSPACE_PATH="${BUB_WORKSPACE_PATH:-/app}"
 mkdir -p "${BUB_HOME}"
 
-if [ -z "${BUB_TAPESTORE_SQLALCHEMY_URL:-}" ]; then
-  export BUB_TAPESTORE_SQLALCHEMY_URL="$(build_tapestore_url)"
-  echo "Derived BUB_TAPESTORE_SQLALCHEMY_URL for ${db_host}:${db_port}/${db_name}"
-else
-  echo "Using explicit BUB_TAPESTORE_SQLALCHEMY_URL"
-fi
+echo "Using BUB_TAPESTORE_SQLALCHEMY_URL for ${db_host}:${db_port}/${db_name}"
 
 export BUB_GRADIO_HOST="${BUB_GRADIO_HOST:-0.0.0.0}"
 export BUB_GRADIO_PORT="${BUB_GRADIO_PORT:-7860}"

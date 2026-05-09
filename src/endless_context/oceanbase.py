@@ -1,14 +1,11 @@
-"""OceanBase dialect registration and current-spec tape store provider."""
+"""OceanBase dialect registration for Bub tape store deployments."""
 
 from __future__ import annotations
 
 import pymysql
 import pyobvector  # noqa: F401
-from bub import hookimpl
 from pyobvector.schema.dialect import OceanBaseDialect as _OceanBaseDialect
 from sqlalchemy.dialects import registry
-
-from endless_context.tape_store import cached_store
 
 
 def _is_savepoint_not_exist(exc: BaseException) -> bool:
@@ -42,9 +39,7 @@ registry.register("mysql.oceanbase", "endless_context.oceanbase", "OceanBaseDial
 
 
 class _OceanBasePlugin:
-    @hookimpl(tryfirst=True)
-    def provide_tape_store(self):
-        return cached_store()
+    pass
 
 
 def register(_framework: object) -> _OceanBasePlugin:
