@@ -116,22 +116,19 @@ echo "Database setup complete!"
 
 export BUB_HOME="${BUB_HOME:-/app/.bub}"
 export BUB_WORKSPACE_PATH="${BUB_WORKSPACE_PATH:-/app}"
-mkdir -p "${BUB_HOME}"
+mkdir -p "${BUB_HOME}" "${BUB_WORKSPACE_PATH}/.agents/skills"
 
 echo "Using BUB_TAPESTORE_SQLALCHEMY_URL for ${db_host}:${db_port}/${db_name}"
 
 export BUB_GRADIO_HOST="${BUB_GRADIO_HOST:-0.0.0.0}"
 export BUB_GRADIO_PORT="${BUB_GRADIO_PORT:-7860}"
 
-# Place Bub built-in skill scripts into workspace so tools/skills can spawn them
-/app/.venv/bin/python /usr/local/bin/setup-bub-workspace.py || true
-
 # Replace skill-installer's install script with project copy (SSL + git fallback)
-if [ -f /app/scripts/install-skill-from-github.py ] && [ -d /app/.agent/skills/skill-installer/scripts ]; then
-  cp /app/scripts/install-skill-from-github.py /app/.agent/skills/skill-installer/scripts/install-skill-from-github.py
+if [ -f /app/scripts/install-skill-from-github.py ] && [ -d /app/.agents/skills/skill-installer/scripts ]; then
+  cp /app/scripts/install-skill-from-github.py /app/.agents/skills/skill-installer/scripts/install-skill-from-github.py
 fi
 
-# Project-local skills when agent runs install-skill-from-github.py
-export BUB_SKILLS_HOME="${BUB_SKILLS_HOME:-/app/.agent/skills}"
+# Persist installed skills in the mounted workspace skills directory.
+export BUB_SKILLS_HOME="${BUB_SKILLS_HOME:-${BUB_WORKSPACE_PATH}/.agents/skills}"
 
 exec /app/.venv/bin/python app.py

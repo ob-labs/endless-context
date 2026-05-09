@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "time": {
+      "type": "streamable_http",
+      "url": "https://mcp.api-inference.modelscope.net/<your-mcp-id>/mcp"
+    }
+  }
+}

@@ -30,6 +30,9 @@ services:
       BUB_GRADIO_PORT: 7860
       BUB_WORKSPACE_PATH: /app
       BUB_HOME: /app/.bub
+    volumes:
+      - ./.agents/mcp.json:/app/.bub/mcp.json:ro
+      - ./.agents/skills:/app/.agents/skills
     restart: unless-stopped
 
 volumes:
