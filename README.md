@@ -52,8 +52,16 @@ The app service uses an explicit `BUB_TAPESTORE_SQLALCHEMY_URL` that points at t
 ### Single container
 ```bash
 docker build -t endless-context:latest .
-docker run --rm -p 7860:7860 -p 2881:2881 endless-context:latest
+docker run --rm \
+  --env-file .env \
+  -p 7860:7860 \
+  -p 2881:2881 \
+  -v "$PWD/.agents/mcp.json:/app/.bub/mcp.json:ro" \
+  -v "$PWD/.agents/skills:/app/.agents/skills" \
+  endless-context:latest
 ```
+
+Use `--env-file .env` so the single-container entrypoint receives the same environment variables as Docker Compose. `BUB_MCP_CONFIG_PATH` defaults to `/app/.bub/mcp.json`; skills are discovered from `${BUB_WORKSPACE_PATH}/.agents/skills`, with `BUB_WORKSPACE_PATH` defaulting to `/app`. The image also includes `.agents/mcp.json` at `/app/.agents/mcp.json`; the entrypoint copies it to the default MCP path only after the placeholder MCP id has been replaced.
 
 ### Bare-metal (advanced, no containers)
 ```bash

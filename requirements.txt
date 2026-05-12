@@ -106,9 +106,9 @@ anthropic==0.94.0 \
     --hash=sha256:42550b401eed8fcd7f6654234560f99c428306301bca726d32bca4bfb6feb748 \
     --hash=sha256:dde8c57de73538c5136c1bca9b16da92e75446b53a73562cc911574e4934435c
     # via any-llm-sdk
-any-llm-sdk==1.8.0 \
-    --hash=sha256:059b8216ef695f05dfc3cc0eee2f29c35160474c4ded4c8251d6b32dcd1928b1 \
-    --hash=sha256:4c4fc65459fa749d10cb051e116eaf4b36918e85d0ae8cd0c619862c3a442fda
+any-llm-sdk==1.14.0 \
+    --hash=sha256:223d8c83871a0f8667d53700f0eadaf27563651a00af62d6d94ccf70724232f0 \
+    --hash=sha256:f5b554898ecfe814490688a7f2152130a45d4152abae453df37de8154fce4f80
     # via
     #   bub
     #   republic
@@ -240,7 +240,9 @@ brotli==1.2.0 \
     --hash=sha256:e99befa0b48f3cd293dafeacdd0d191804d105d279e0b387a32054c1180f3161 \
     --hash=sha256:fc1530af5c3c275b8524f2e24841cbe2599d74462455e9bae5109e9ff42e9361
     # via gradio
-bub @ git+https://github.com/bubbuild/bub.git@f86c3d7be17b5056f96c53f8c87257fa189c79bb
+bub==0.3.7 \
+    --hash=sha256:44622ea2a71f932e1608dfbb2cd394fef5ab831b5d8d6e6780bfe5554bd5c87a \
+    --hash=sha256:7d942e8a209fe65a367f989141e3b35a2068ff7f0e53cb6a3a0e850d7cf924c4
     # via endless-context
 bub-mcp @ git+https://github.com/bubbuild/bub-contrib.git@85e2da5a70e75b95c8e896370f4d7ee7d5c04120#subdirectory=packages/bub-mcp
     # via endless-context
@@ -1730,9 +1732,9 @@ referencing==0.37.0 \
     #   jsonschema
     #   jsonschema-path
     #   jsonschema-specifications
-republic==0.5.7 \
-    --hash=sha256:702e2a3b662a91e68cc9c5b4893460dba01e02f081f309e6ce30d1e79c336db3 \
-    --hash=sha256:74cb0a02c3dffaa3438a8f41d19b137b7c8310a7d6c2c821b81cf98d5167200a
+republic==0.5.8 \
+    --hash=sha256:4b8a3cad45080557c7d34b49cfd2d5d24d01aaba35d27ac19a3bf510674b77e5 \
+    --hash=sha256:e323881df8239fb23b4cce3f7323aee88dae257fa4a47e625090d711545919a0
     # via
     #   bub
     #   endless-context

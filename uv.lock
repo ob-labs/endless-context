@@ -186,9 +186,10 @@ wheels = [
 
 [[package]]
 name = "any-llm-sdk"
-version = "1.8.0"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anthropic" },
     { name = "httpx" },
     { name = "openai" },
     { name = "openresponses-types" },
@@ -196,14 +197,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/03/4a/9aaf246e535d4d9d59992ec9fb4c4008aeb450e5f47c87c891c7c31b2514/any_llm_sdk-1.8.0.tar.gz", hash = "sha256:4c4fc65459fa749d10cb051e116eaf4b36918e85d0ae8cd0c619862c3a442fda", size = 128310, upload-time = "2026-02-04T11:13:31.116Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/da/94050acd3b81f5390ec16c3ad9967e9372e169bd85b294b3552e3957f58f/any_llm_sdk-1.14.0.tar.gz", hash = "sha256:223d8c83871a0f8667d53700f0eadaf27563651a00af62d6d94ccf70724232f0", size = 166266, upload-time = "2026-05-01T13:39:04.096Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a4/af/84ec19d7e5af2fa2ddf9762652ff68ed5d80bd0c74db3c291376dd10ecb0/any_llm_sdk-1.8.0-py3-none-any.whl", hash = "sha256:059b8216ef695f05dfc3cc0eee2f29c35160474c4ded4c8251d6b32dcd1928b1", size = 181447, upload-time = "2026-02-04T11:13:29.783Z" },
-]
-
-[package.optional-dependencies]
-anthropic = [
-    { name = "anthropic" },
+    { url = "https://files.pythonhosted.org/packages/8e/d8/6834b916242071adde1ed945fe18e2e69f9f3f552addd41c6ed6be31aad2/any_llm_sdk-1.14.0-py3-none-any.whl", hash = "sha256:f5b554898ecfe814490688a7f2152130a45d4152abae453df37de8154fce4f80", size = 232195, upload-time = "2026-05-01T13:39:02.129Z" },
 ]
 
 [[package]]
@@ -372,7 +368,7 @@ version = "0.3.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "any-llm-sdk", extra = ["anthropic"] },
+    { name = "any-llm-sdk" },
     { name = "httpx", extra = ["socks"] },
     { name = "inquirer-textual" },
     { name = "loguru" },
@@ -738,7 +734,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pymysql", specifier = ">=1.1.0" },
     { name = "pyobvector", specifier = ">=0.2.22" },
-    { name = "republic", specifier = "==0.5.7" },
+    { name = "republic", specifier = "==0.5.8" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "sqlglot", specifier = ">=26.0.0,<30.0.0" },
 ]
@@ -2701,7 +2697,7 @@ wheels = [
 
 [[package]]
 name = "republic"
-version = "0.5.7"
+version = "0.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
@@ -2709,9 +2705,9 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4d/40/9ebd36e489696c0904df18bf4da6edc4b87f203b55f6942d3f782c69530c/republic-0.5.7.tar.gz", hash = "sha256:74cb0a02c3dffaa3438a8f41d19b137b7c8310a7d6c2c821b81cf98d5167200a", size = 155715, upload-time = "2026-03-27T06:59:32.557Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/71/4766e21bd9aff9edc806556c92f208bc14aa7d708f8f4d3941bc5ebe6115/republic-0.5.8.tar.gz", hash = "sha256:4b8a3cad45080557c7d34b49cfd2d5d24d01aaba35d27ac19a3bf510674b77e5", size = 157246, upload-time = "2026-05-10T14:54:40.281Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/33/26f4ad2665f96af4d02ae9c6f629e1d0c2538f22cecece3f8df6cd4c1da0/republic-0.5.7-py3-none-any.whl", hash = "sha256:702e2a3b662a91e68cc9c5b4893460dba01e02f081f309e6ce30d1e79c336db3", size = 62290, upload-time = "2026-03-27T06:59:33.458Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/9c/c453a54b8678e5cd6d6db3d8730a4fad86e7cc558d0d9cd6b046ee61013b/republic-0.5.8-py3-none-any.whl", hash = "sha256:e323881df8239fb23b4cce3f7323aee88dae257fa4a47e625090d711545919a0", size = 62805, upload-time = "2026-05-10T14:54:38.895Z" },
 ]
 
 [[package]]

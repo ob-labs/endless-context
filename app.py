@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Iterable
+from pathlib import Path
 
 from bub.channels.manager import ChannelManager
 from bub.framework import BubFramework
 
 
+def runtime_workspace_path() -> Path:
+    raw_path = os.environ.get("BUB_WORKSPACE_PATH")
+    if raw_path and raw_path.strip():
+        return Path(raw_path).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
 def build_framework() -> BubFramework:
     framework = BubFramework()
+    framework.workspace = runtime_workspace_path()
     framework.load_hooks()
     return framework
 

@@ -28,11 +28,12 @@ services:
     environment:
       BUB_GRADIO_HOST: 0.0.0.0
       BUB_GRADIO_PORT: 7860
-      BUB_WORKSPACE_PATH: /app
+      BUB_WORKSPACE_PATH: ${BUB_WORKSPACE_PATH:-/app}
       BUB_HOME: /app/.bub
+      BUB_MCP_CONFIG_PATH: ${BUB_MCP_CONFIG_PATH:-/app/.bub/mcp.json}
     volumes:
-      - ./.agents/mcp.json:/app/.bub/mcp.json:ro
-      - ./.agents/skills:/app/.agents/skills
+      - ./.agents/mcp.json:${BUB_MCP_CONFIG_PATH:-/app/.bub/mcp.json}:ro
+      - ./.agents/skills:${BUB_WORKSPACE_PATH:-/app}/.agents/skills
     restart: unless-stopped
 
 volumes:

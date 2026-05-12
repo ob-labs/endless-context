@@ -36,6 +36,7 @@ RUN INSECURE_HOST="${PIP_INDEX_URL#http://}" && \
 ENV PATH="/app/.venv/bin:/root/.local/bin:${PATH}"
 ENV BUB_HOME=/app/.bub
 ENV BUB_WORKSPACE_PATH=/app
+ENV BUB_MCP_CONFIG_PATH=/app/.bub/mcp.json
 
 WORKDIR /app
 
@@ -45,6 +46,8 @@ COPY pyproject.toml uv.lock README.md ./
 COPY app.py ./
 COPY src ./src
 COPY scripts ./scripts
+COPY .agents/mcp.json ./.agents/mcp.json
+COPY .agents/skills ./.agents/skills
 COPY .env.example ./.env.example
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 

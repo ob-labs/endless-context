@@ -40,7 +40,13 @@ SeekDB is kept on the Compose network by default; only the Gradio UI is publishe
 
 ```bash
 docker build -t endless-context:latest .
-docker run --rm -p 7860:7860 -p 2881:2881 endless-context:latest
+docker run --rm \
+  --env-file .env \
+  -p 7860:7860 \
+  -p 2881:2881 \
+  -v "$PWD/.agents/mcp.json:/app/.bub/mcp.json:ro" \
+  -v "$PWD/.agents/skills:/app/.agents/skills" \
+  endless-context:latest
 ```
 
 ### ModelScope Docker Studio
@@ -55,8 +61,10 @@ docker run --rm -p 7860:7860 -p 2881:2881 endless-context:latest
 - `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`
 - `BUB_TAPESTORE_SQLALCHEMY_URL`
 - `BUB_GRADIO_HOST`, `BUB_GRADIO_PORT`
+- `BUB_WORKSPACE_PATH`, `BUB_MCP_CONFIG_PATH`
 
 `BUB_TAPESTORE_SQLALCHEMY_URL` is the single database configuration source. The checked-in `.env.example` points at `seekdb` for Docker Compose; for bare-metal or the single-container image, change it to the actual reachable SeekDB endpoint.
+Use `--env-file .env` for single-container runs so the entrypoint receives the same environment variables as Docker Compose. `BUB_MCP_CONFIG_PATH` defaults to `/app/.bub/mcp.json`; project skills are discovered from `${BUB_WORKSPACE_PATH}/.agents/skills`. The image also includes `.agents/mcp.json` at `/app/.agents/mcp.json`; the entrypoint copies it to the default MCP path only after the placeholder MCP id has been replaced.
 
 ## Development workflow (Makefile)
 

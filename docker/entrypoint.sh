@@ -116,7 +116,17 @@ echo "Database setup complete!"
 
 export BUB_HOME="${BUB_HOME:-/app/.bub}"
 export BUB_WORKSPACE_PATH="${BUB_WORKSPACE_PATH:-/app}"
-mkdir -p "${BUB_HOME}" "${BUB_WORKSPACE_PATH}/.agents/skills"
+export BUB_MCP_CONFIG_PATH="${BUB_MCP_CONFIG_PATH:-${BUB_HOME}/mcp.json}"
+mkdir -p "${BUB_HOME}" "$(dirname "${BUB_MCP_CONFIG_PATH}")" "${BUB_WORKSPACE_PATH}/.agents/skills"
+
+packaged_mcp_config="${BUB_WORKSPACE_PATH}/.agents/mcp.json"
+if [ ! -e "${BUB_MCP_CONFIG_PATH}" ] && [ -f "${packaged_mcp_config}" ]; then
+  if grep -q "<your-mcp-id>" "${packaged_mcp_config}"; then
+    echo "Packaged MCP config still contains placeholder; skip enabling it"
+  else
+    cp "${packaged_mcp_config}" "${BUB_MCP_CONFIG_PATH}"
+  fi
+fi
 
 echo "Using BUB_TAPESTORE_SQLALCHEMY_URL for ${db_host}:${db_port}/${db_name}"
 
