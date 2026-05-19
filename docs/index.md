@@ -1,20 +1,24 @@
 # Endless Context Docs
 
+Endless Context is a Bub extension package for one deployment shape: keep the Bub runtime upstream, expose Gradio as a Bub channel, and persist tape data through `bub-tapestore-sqlalchemy` with OceanBase/seekdb compatibility.
+
+> [Bub](https://github.com/bubbuild/bub) is the upstream runtime and extension model behind Endless Context. If you are also interested in the database-native agent harness we are building, see [AgentSeek](https://github.com/ob-labs/agentseek).
+
 ## Overview
 
-Endless Context is a Bub extension package focused on one deployment shape:
+The repository is split into a few small pieces:
 
-- Bub runtime and CLI stay upstream
-- Gradio is exposed as a Bub channel
-- tape persistence is delegated to `bub-tapestore-sqlalchemy`
-- OceanBase/seekdb support is provided through a thin compatibility plugin
+- `app.py` boots `BubFramework`, loads installed Bub hooks, and starts `ChannelManager` with `gradio` enabled.
+- `src/endless_context/channel.py` provides the Gradio channel and UI wiring.
+- `src/endless_context/plugin.py` provides the Bub plugin hooks.
+- `src/endless_context/oceanbase.py` registers the OceanBase dialect expected by the tape store.
 
 ## Architecture
 
-- **Bub plugin**: `src/endless_context/plugin.py`
+- **Launcher**: `app.py`
+- **Plugin hooks**: `src/endless_context/plugin.py`
 - **Gradio channel**: `src/endless_context/channel.py`
 - **OceanBase compatibility**: `src/endless_context/oceanbase.py`
-- **ModelScope launcher**: `app.py`
 
 ## Runtime flow
 
@@ -24,7 +28,7 @@ Endless Context is a Bub extension package focused on one deployment shape:
 4. Bub runs the normal hook pipeline and persists tape entries through `bub-tapestore-sqlalchemy`.
 5. Assistant output is routed back to `GradioChannel.send()` and rendered in the UI.
 
-## Quick start
+## Deployment options
 
 ### Docker Compose (recommended for local)
 
@@ -33,6 +37,7 @@ cp .env.example .env
 make compose-up
 ```
 
+Fill provider credentials in `.env` before the first start.
 Starts SeekDB + app together. Stop with `make compose-down`. UI at `http://localhost:7860`.
 SeekDB is kept on the Compose network by default; only the Gradio UI is published to the host.
 
@@ -49,6 +54,18 @@ docker run --rm \
   endless-context:latest
 ```
 
+Use `--env-file .env` so the container receives the same environment variables as Docker Compose.
+
+### Bare-metal
+
+```bash
+uv sync
+cp .env.example .env
+make run
+```
+
+Set `BUB_TAPESTORE_SQLALCHEMY_URL` to a reachable SeekDB endpoint before starting the app.
+
 ### ModelScope Docker Studio
 
 - Use the provided `Dockerfile` and `docker/entrypoint.sh`.
@@ -56,20 +73,28 @@ docker run --rm \
 - Set at least `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE` when needed, and `BUB_TAPESTORE_SQLALCHEMY_URL`.
 - Build and run the container, then open the forwarded `7860` port.
 
-## Configuration (.env)
+## Configuration
+
+The main runtime variables are:
 
 - `BUB_MODEL`, `BUB_API_KEY`, `BUB_API_BASE`
 - `BUB_TAPESTORE_SQLALCHEMY_URL`
 - `BUB_GRADIO_HOST`, `BUB_GRADIO_PORT`
 - `BUB_WORKSPACE_PATH`, `BUB_MCP_CONFIG_PATH`
 
-`BUB_TAPESTORE_SQLALCHEMY_URL` is the single database configuration source. The checked-in `.env.example` points at `seekdb` for Docker Compose; for bare-metal or the single-container image, change it to the actual reachable SeekDB endpoint.
-Use `--env-file .env` for single-container runs so the entrypoint receives the same environment variables as Docker Compose. `BUB_MCP_CONFIG_PATH` defaults to `/app/.bub/mcp.json`; project skills are discovered from `${BUB_WORKSPACE_PATH}/.agents/skills`. The image also includes `.agents/mcp.json` at `/app/.agents/mcp.json`; the entrypoint copies it to the default MCP path only after the placeholder MCP id has been replaced.
+`BUB_TAPESTORE_SQLALCHEMY_URL` is the single database configuration source.
+The checked-in `.env.example` points at `seekdb` for Docker Compose; for bare-metal or the single-container image, change it to the actual reachable endpoint.
+
+`BUB_WORKSPACE_PATH` defaults to `/app` inside the image.
+`BUB_MCP_CONFIG_PATH` defaults to `/app/.bub/mcp.json`.
+The packaged `.agents/mcp.json` is copied into that default path only after the placeholder MCP id has been replaced.
+Use `--env-file .env` for single-container runs so the entrypoint receives the same environment variables as Docker Compose.
+Project skills are discovered from `${BUB_WORKSPACE_PATH}/.agents/skills`.
 
 ## Development workflow (Makefile)
 
 - `make install` — `uv sync` + `uv run prek install`
-- `make compose-up|down|logs` — Docker Compose lifecycle (local recommended)
+- `make compose-up` / `make compose-down` / `make compose-logs` — Docker Compose lifecycle
 - `make docker-build` — build single-container image for ModelScope
 - `make run` — start Bub's `ChannelManager` with the `gradio` channel via `python app.py`
 - `make test` — `uv run pytest`
